@@ -332,6 +332,16 @@ namespace effecurved.ViewModels
                             
                             if (result?.OuterCurves != null && result.OuterCurves.Count >= 3)
                             {
+                                // Bước 1: Luôn vẽ DetailCurves trước để user thấy hình dù FilledRegion có lỗi
+                                try
+                                {
+                                    GeometryUnrollService.Instance.DrawDetailCurvesFromResult(_doc, targetView, result);
+                                }
+                                catch (Exception ex)
+                                {
+                                    Log.Warning(ex, "Draw detail curves (continuing)");
+                                }
+                                // Bước 2: Thử tạo FilledRegion
                                 try
                                 {
                                     GeometryUnrollService.Instance.CreateFilledRegion(_doc, targetView, result);

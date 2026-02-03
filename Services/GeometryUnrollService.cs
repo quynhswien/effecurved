@@ -48,8 +48,14 @@ namespace effecurved.Services
                 }
                 else
                 {
-                    Log.Warning("Face type not supported for unrolling");
-                    throw new NotSupportedException("This face type is not supported for unrolling.");
+                    // Spline/ellipse/revolved/Hermite: thử unroll theo boundary tessellation
+                    Log.Debug("Face not cylindrical/conical/planar/ruled; trying boundary tessellation (spline/ellipse)");
+                    result.OuterCurves = UnrollByBoundaryTessellation(face, insertionPoint);
+                    if (result.OuterCurves == null || result.OuterCurves.Count < 3)
+                    {
+                        Log.Warning("Face type not supported for unrolling");
+                        throw new NotSupportedException("This face type is not supported for unrolling.");
+                    }
                 }
                 Log.Debug($"Unroll completed: outer={result.OuterCurves?.Count ?? 0}, inner loops={result.InnerLoops?.Count ?? 0}");
                 return result;
@@ -400,6 +406,7 @@ namespace effecurved.Services
                 }
                 lastPoint = tess[reverse ? 0 : tess.Count - 1];
             }
+            // Không mirror: điểm 2 (gốc) ở trái, điểm 1 (cuối) ở phải — khớp như ảnh 2
             return CreateCurvesFromPoints(points2D);
         }
 
@@ -542,25 +549,19 @@ namespace effecurved.Services
         }
 
         /// <summary>
-        /// Unrolls a ruled surface
+        /// Unrolls a ruled surface (and spline/ellipse-style boundaries). Edges are sorted into a continuous loop so the 2D boundary is valid for FilledRegion.
         /// </summary>
         private List<Curve> UnrollRuledSurface(Face face, XYZ insertionPoint)
         {
             List<Curve> curves2D = new List<Curve>();
-            
-            // Get edge loops - use only the largest (outer) loop
             EdgeArrayArray edgeLoops = face.EdgeLoops;
-            
             if (edgeLoops.Size == 0)
             {
                 Log.Warning("No edge loops found on ruled surface");
                 return curves2D;
             }
-            
-            // Find largest loop
             EdgeArray largestLoop = null;
             int maxEdges = 0;
-            
             foreach (EdgeArray edgeLoop in edgeLoops)
             {
                 if (edgeLoop.Size > maxEdges)
@@ -569,45 +570,116 @@ namespace effecurved.Services
                     largestLoop = edgeLoop;
                 }
             }
-            
             if (largestLoop == null)
             {
                 Log.Warning("No valid edge loop found on ruled surface");
                 return curves2D;
             }
-            
-            // Simplified approach: tessellate and approximate unrolling
+
+            List<Edge> sorted = SortEdgesIntoLoop(largestLoop);
+            if (sorted.Count != largestLoop.Size)
+                Log.Warning($"Ruled surface: edge sort incomplete ({sorted.Count}/{largestLoop.Size}); boundary may be invalid");
+            const double tol = 0.1;
             List<XYZ> points2D = new List<XYZ>();
-            double accumulatedLength = 0;
-            XYZ previousPoint = null;
-            
-            foreach (Edge edge in largestLoop)
+            double lengthAtStartOfEdge = 0;
+            XYZ previousPoint3D = null;
+            for (int ei = 0; ei < sorted.Count; ei++)
             {
-                Curve curve3D = edge.AsCurve();
-                IList<XYZ> tessellatedPoints = curve3D.Tessellate();
-                
-                for (int i = 0; i < tessellatedPoints.Count; i++)
+                Curve curve3D = sorted[ei].AsCurve();
+                double edgeLength = curve3D.Length;
+                IList<XYZ> tess = curve3D.Tessellate();
+                if (tess == null || tess.Count == 0) continue;
+                bool reverse = (previousPoint3D != null && tess.Count > 0 && previousPoint3D.DistanceTo(tess[tess.Count - 1]) <= tol);
+                int start = reverse ? tess.Count - 1 : (ei == 0 ? 0 : 1);
+                int end = reverse ? 0 : tess.Count;
+                int step = reverse ? -1 : 1;
+                // Thu thập điểm trên edge theo thứ tự (Q₀..Qₘ)
+                var Q = new List<XYZ>();
+                for (int i = start; (reverse && i >= end) || (!reverse && i < end); i += step)
+                    Q.Add(tess[i]);
+                if (Q.Count == 0) continue;
+                // Chord cumulative trong edge: c₀=0, cᵢ=Σ|QⱼQⱼ₊₁|, chuẩn hóa tᵢ=cᵢ/cₘ → s(Pᵢ)=lengthBeforeEdge + tᵢ×edge.Length
+                var chordCumulative = new List<double> { 0 };
+                for (int j = 0; j < Q.Count - 1; j++)
+                    chordCumulative.Add(chordCumulative[chordCumulative.Count - 1] + Q[j].DistanceTo(Q[j + 1]));
+                double cTotal = chordCumulative[chordCumulative.Count - 1];
+                for (int j = 0; j < Q.Count; j++)
                 {
-                    if (previousPoint != null)
-                    {
-                        // Calculate length between consecutive points
-                        accumulatedLength += tessellatedPoints[i].DistanceTo(previousPoint);
-                    }
-                    previousPoint = tessellatedPoints[i];
-                    
-                    // Simple 2D projection: X = accumulated length, Y = Z coordinate
-                    double x = accumulatedLength;
-                    double y = tessellatedPoints[i].Z;
-                    
-                    // CRITICAL: Force Z = 0 for drafting view (must be planar)
-                    XYZ point2D = new XYZ(x + insertionPoint.X, y + insertionPoint.Y, 0);
-                    points2D.Add(point2D);
+                    double ti = (cTotal > 0) ? (chordCumulative[j] / cTotal) : 0;
+                    double developedLength = lengthAtStartOfEdge + ti * edgeLength;
+                    XYZ p3 = Q[j];
+                    points2D.Add(new XYZ(developedLength + insertionPoint.X, insertionPoint.Y - p3.Z, 0));
+                }
+                lengthAtStartOfEdge += edgeLength;
+                previousPoint3D = tess[reverse ? 0 : tess.Count - 1];
+            }
+            // Không mirror: điểm 2 (gốc) ở trái (x=0), điểm 1 (cuối) ở phải (x=totalLength) để khớp như ảnh 2
+            curves2D = CreateCurvesFromPoints(points2D);
+            Log.Debug($"Created {curves2D.Count} curves for ruled surface (developed length = {lengthAtStartOfEdge:F1})");
+            return curves2D;
+        }
+
+        /// <summary>
+        /// Unroll face by tessellating the outer boundary: X = developed length along path, Y = -Z for orientation.
+        /// Used for spline/ellipse/revolved/Hermite faces that are not cylindrical/conical/planar/ruled.
+        /// </summary>
+        private List<Curve> UnrollByBoundaryTessellation(Face face, XYZ insertionPoint)
+        {
+            List<Curve> curves2D = new List<Curve>();
+            EdgeArrayArray edgeLoops = face.EdgeLoops;
+            if (edgeLoops == null || edgeLoops.Size == 0)
+            {
+                Log.Warning("No edge loops for boundary tessellation");
+                return curves2D;
+            }
+            EdgeArray largestLoop = null;
+            int maxEdges = 0;
+            foreach (EdgeArray edgeLoop in edgeLoops)
+            {
+                if (edgeLoop.Size > maxEdges)
+                {
+                    maxEdges = edgeLoop.Size;
+                    largestLoop = edgeLoop;
                 }
             }
-            
+            if (largestLoop == null) return curves2D;
+            List<Edge> sorted = SortEdgesIntoLoop(largestLoop);
+            if (sorted.Count != largestLoop.Size)
+                Log.Warning($"Boundary tessellation: edge sort incomplete ({sorted.Count}/{largestLoop.Size})");
+            const double tol = 0.1;
+            List<XYZ> points2D = new List<XYZ>();
+            double lengthAtStartOfEdge = 0;
+            XYZ previousPoint3D = null;
+            for (int ei = 0; ei < sorted.Count; ei++)
+            {
+                Curve curve3D = sorted[ei].AsCurve();
+                double edgeLength = curve3D.Length;
+                IList<XYZ> tess = curve3D.Tessellate();
+                if (tess == null || tess.Count == 0) continue;
+                bool reverse = (previousPoint3D != null && tess.Count > 0 && previousPoint3D.DistanceTo(tess[tess.Count - 1]) <= tol);
+                int start = reverse ? tess.Count - 1 : (ei == 0 ? 0 : 1);
+                int end = reverse ? 0 : tess.Count;
+                int step = reverse ? -1 : 1;
+                var Q = new List<XYZ>();
+                for (int i = start; (reverse && i >= end) || (!reverse && i < end); i += step)
+                    Q.Add(tess[i]);
+                if (Q.Count == 0) continue;
+                var chordCumulative = new List<double> { 0 };
+                for (int j = 0; j < Q.Count - 1; j++)
+                    chordCumulative.Add(chordCumulative[chordCumulative.Count - 1] + Q[j].DistanceTo(Q[j + 1]));
+                double cTotal = chordCumulative[chordCumulative.Count - 1];
+                for (int j = 0; j < Q.Count; j++)
+                {
+                    double ti = (cTotal > 0) ? (chordCumulative[j] / cTotal) : 0;
+                    double developedLength = lengthAtStartOfEdge + ti * edgeLength;
+                    XYZ p3 = Q[j];
+                    points2D.Add(new XYZ(developedLength + insertionPoint.X, insertionPoint.Y - p3.Z, 0));
+                }
+                lengthAtStartOfEdge += edgeLength;
+                previousPoint3D = tess[reverse ? 0 : tess.Count - 1];
+            }
             curves2D = CreateCurvesFromPoints(points2D);
-            Log.Debug($"Created {curves2D.Count} curves for ruled surface");
-            
+            Log.Debug($"Created {curves2D.Count} curves from boundary tessellation (developed length = {lengthAtStartOfEdge:F1})");
             return curves2D;
         }
 
@@ -941,7 +1013,41 @@ namespace effecurved.Services
         }
 
         /// <summary>
-        /// Creates a filled region from face unroll result (outer + inner loops). On failure (e.g. invalid inner loops), retries with outer only.
+        /// Bước 1: Luôn vẽ DetailCurves từ kết quả unroll (outer + inner) để user thấy hình dù FilledRegion có lỗi hay không.
+        /// </summary>
+        public void DrawDetailCurvesFromResult(Document doc, ViewDrafting draftingView, FaceUnrollResult result)
+        {
+            if (result?.OuterCurves == null || result.OuterCurves.Count < 3) return;
+            List<Curve> flatOuter = FlattenToZ0IfNeeded(result.OuterCurves);
+            int drawn = 0;
+            foreach (Curve c in flatOuter)
+            {
+                if (c == null || c.Length < 0.001) continue;
+                try
+                {
+                    doc.Create.NewDetailCurve(draftingView, c);
+                    drawn++;
+                }
+                catch (Exception e) { Log.Warning(e, "DetailCurve outer"); }
+            }
+            if (result.InnerLoops != null)
+            {
+                foreach (List<Curve> innerCurves in result.InnerLoops)
+                {
+                    if (innerCurves == null || innerCurves.Count < 3) continue;
+                    foreach (Curve c in FlattenToZ0IfNeeded(innerCurves))
+                    {
+                        if (c == null || c.Length < 0.001) continue;
+                        try { doc.Create.NewDetailCurve(draftingView, c); drawn++; } catch (Exception e) { Log.Warning(e, "DetailCurve inner"); }
+                    }
+                }
+            }
+            Log.Information($"Drew {drawn} detail curves (outer + inner)");
+        }
+
+        /// <summary>
+        /// Creates one FilledRegion (outer + inner voids). Priority: 1) full region with voids; only if that fails, fallback to outer-only + detail lines.
+        /// Never keeps detail lines when a complete FilledRegion (with voids) can be created.
         /// </summary>
         public FilledRegion CreateFilledRegion(Document doc, ViewDrafting draftingView, FaceUnrollResult result, ElementId fillRegionTypeId = null)
         {
@@ -955,6 +1061,7 @@ namespace effecurved.Services
             CurveLoop outerLoop = CreateCurveLoop(flatOuter);
             if (!outerLoop.IsCounterclockwise(XYZ.BasisZ)) outerLoop.Flip();
 
+            // Ưu tiên cao nhất: 1 FilledRegion hoàn chỉnh (outer + void)
             List<CurveLoop> curveLoops = new List<CurveLoop> { outerLoop };
             if (result.InnerLoops != null)
             {
@@ -979,85 +1086,93 @@ namespace effecurved.Services
             {
                 return FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, curveLoops);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Inner loops gây lỗi: tạo FilledRegion chỉ outer, vẽ DetailCurve cho void, rồi thử tạo void từ các đường đó
-                if (curveLoops.Count > 1)
+                // Chỉ outer (ruled/spline): nếu FilledRegion thất bại, vẽ boundary bằng DetailCurve để user thấy hình
+                if (curveLoops.Count == 1)
                 {
-                    Log.Warning("FilledRegion with inner loops failed; creating outer only, then drawing inner as detail lines and retrying voids from those curves");
-                    FilledRegion regionOuterOnly = FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, new List<CurveLoop> { outerLoop });
-                    var detailCurvesByLoop = new List<List<CurveElement>>();
-                    if (result.InnerLoops != null)
+                    Log.Warning(ex, "FilledRegion with outer boundary failed; drawing boundary as detail lines");
+                    foreach (Curve c in flatOuter)
                     {
-                        foreach (List<Curve> innerCurves in result.InnerLoops)
-                        {
-                            if (innerCurves == null || innerCurves.Count < 3) continue;
-                            List<Curve> flatInner = FlattenToZ0IfNeeded(innerCurves);
-                            var oneLoop = new List<CurveElement>();
-                            foreach (Curve c in flatInner)
-                            {
-                                if (c == null || c.Length < 0.001) continue;
-                                try
-                                {
-                                    var dc = doc.Create.NewDetailCurve(draftingView, c) as CurveElement;
-                                    if (dc != null) oneLoop.Add(dc);
-                                }
-                                catch (Exception ex) { Log.Warning(ex, "DetailCurve for inner void"); }
-                            }
-                            if (oneLoop.Count >= 3) detailCurvesByLoop.Add(oneLoop);
-                        }
+                        if (c == null || c.Length < 0.001) continue;
+                        try { doc.Create.NewDetailCurve(draftingView, c); } catch { }
                     }
-
-                    // Tạo void từ geometry của các DetailCurve (clone curve để không phụ thuộc element sau khi xóa)
-                    var innerLoopsFromDetail = new List<CurveLoop>();
-                    var savedCurvesPerLoop = new List<List<Curve>>();
-                    foreach (var dcList in detailCurvesByLoop)
-                    {
-                        var curvesFromDetail = new List<Curve>();
-                        foreach (CurveElement ce in dcList)
-                        {
-                            Curve geom = ce?.GeometryCurve;
-                            if (geom != null && geom.Length >= 0.001)
-                                curvesFromDetail.Add(Line.CreateBound(geom.GetEndPoint(0), geom.GetEndPoint(1)));
-                        }
-                        savedCurvesPerLoop.Add(curvesFromDetail);
-                        if (curvesFromDetail.Count < 3) continue;
-                        try
-                        {
-                            CurveLoop loop = CreateCurveLoop(curvesFromDetail);
-                            if (loop != null && !loop.IsOpen())
-                            {
-                                if (loop.IsCounterclockwise(XYZ.BasisZ)) loop.Flip();
-                                innerLoopsFromDetail.Add(loop);
-                            }
-                        }
-                        catch (Exception ex) { Log.Warning(ex, "CurveLoop from detail curves"); }
-                    }
-
-                    if (innerLoopsFromDetail.Count > 0)
-                    {
-                        doc.Delete(regionOuterOnly.Id);
-                        foreach (var dcList in detailCurvesByLoop)
-                            foreach (CurveElement ce in dcList) doc.Delete(ce.Id);
-                        var withVoids = new List<CurveLoop> { outerLoop };
-                        withVoids.AddRange(innerLoopsFromDetail);
-                        try
-                        {
-                            return FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, withVoids);
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.Warning(ex, "FilledRegion with voids from detail curves failed; recreating outer only and redrawing detail lines");
-                            regionOuterOnly = FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, new List<CurveLoop> { outerLoop });
-                            foreach (var curves in savedCurvesPerLoop)
-                                foreach (Curve c in curves)
-                                { try { if (c != null && c.Length >= 0.001) doc.Create.NewDetailCurve(draftingView, c); } catch { } }
-                            return regionOuterOnly;
-                        }
-                    }
-                    return regionOuterOnly;
+                    throw;
                 }
-                throw;
+                // Có inner loops → thử qua DetailCurve để lấy 1 region có void
+
+                Log.Warning("FilledRegion with inner loops failed; retrying via detail-curve geometry to get one complete region with voids");
+                FilledRegion regionOuterOnly = FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, new List<CurveLoop> { outerLoop });
+                var detailCurvesByLoop = new List<List<CurveElement>>();
+                if (result.InnerLoops != null)
+                {
+                    foreach (List<Curve> innerCurves in result.InnerLoops)
+                    {
+                        if (innerCurves == null || innerCurves.Count < 3) continue;
+                        List<Curve> flatInner = FlattenToZ0IfNeeded(innerCurves);
+                        var oneLoop = new List<CurveElement>();
+                        foreach (Curve c in flatInner)
+                        {
+                            if (c == null || c.Length < 0.001) continue;
+                            try
+                            {
+                                var dc = doc.Create.NewDetailCurve(draftingView, c) as CurveElement;
+                                if (dc != null) oneLoop.Add(dc);
+                            }
+                            catch (Exception e) { Log.Warning(e, "DetailCurve for inner void"); }
+                        }
+                        if (oneLoop.Count >= 3) detailCurvesByLoop.Add(oneLoop);
+                    }
+                }
+
+                var innerLoopsFromDetail = new List<CurveLoop>();
+                var savedCurvesPerLoop = new List<List<Curve>>();
+                foreach (var dcList in detailCurvesByLoop)
+                {
+                    var curvesFromDetail = new List<Curve>();
+                    foreach (CurveElement ce in dcList)
+                    {
+                        Curve geom = ce?.GeometryCurve;
+                        if (geom != null && geom.Length >= 0.001)
+                            curvesFromDetail.Add(Line.CreateBound(geom.GetEndPoint(0), geom.GetEndPoint(1)));
+                    }
+                    savedCurvesPerLoop.Add(curvesFromDetail);
+                    if (curvesFromDetail.Count < 3) continue;
+                    try
+                    {
+                        CurveLoop loop = CreateCurveLoop(curvesFromDetail);
+                        if (loop != null && !loop.IsOpen())
+                        {
+                            if (loop.IsCounterclockwise(XYZ.BasisZ)) loop.Flip();
+                            innerLoopsFromDetail.Add(loop);
+                        }
+                    }
+                    catch (Exception e) { Log.Warning(e, "CurveLoop from detail curves"); }
+                }
+
+                if (innerLoopsFromDetail.Count > 0)
+                {
+                    doc.Delete(regionOuterOnly.Id);
+                    foreach (var dcList in detailCurvesByLoop)
+                        foreach (CurveElement ce in dcList) doc.Delete(ce.Id);
+                    var withVoids = new List<CurveLoop> { outerLoop };
+                    withVoids.AddRange(innerLoopsFromDetail);
+                    try
+                    {
+                        // Thành công: 1 FilledRegion có void, không giữ detail line
+                        return FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, withVoids);
+                    }
+                    catch (Exception e)
+                    {
+                        Log.Warning(e, "FilledRegion with voids from detail curves failed; fallback: outer only + detail lines");
+                        regionOuterOnly = FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, new List<CurveLoop> { outerLoop });
+                        foreach (var curves in savedCurvesPerLoop)
+                            foreach (Curve c in curves)
+                            { try { if (c != null && c.Length >= 0.001) doc.Create.NewDetailCurve(draftingView, c); } catch { } }
+                        return regionOuterOnly;
+                    }
+                }
+                return regionOuterOnly;
             }
         }
 
