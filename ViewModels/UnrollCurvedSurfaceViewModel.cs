@@ -327,20 +327,17 @@ namespace effecurved.ViewModels
                         {
                             Log.Information($"Processing face {_selectedFaces.IndexOf(face) + 1} of {_selectedFaces.Count}");
                             
-                            // Unroll this face
-                            var curves = GeometryUnrollService.Instance.UnrollFace(face, insertionPoint);
+                            // Unroll this face (outer + inner loops = openings)
+                            var result = GeometryUnrollService.Instance.UnrollFace(face, insertionPoint);
                             
-                            if (curves != null && curves.Count >= 3)
+                            if (result?.OuterCurves != null && result.OuterCurves.Count >= 3)
                             {
-                                // Create filled region for this face
                                 try
                                 {
-                                    GeometryUnrollService.Instance.CreateFilledRegion(_doc, targetView, curves);
-                                    Log.Information($"Created filled region for face {_selectedFaces.IndexOf(face) + 1}");
+                                    GeometryUnrollService.Instance.CreateFilledRegion(_doc, targetView, result);
+                                    Log.Information($"Created filled region for face {_selectedFaces.IndexOf(face) + 1}" +
+                                        (result.HasOpenings ? $" ({result.InnerLoops.Count} opening(s) or outer only)" : ""));
                                     successCount++;
-                                    
-                                    // Offset insertion point for next face (move right by 10 feet)
-                                    // CRITICAL: Keep Z = 0 for drafting view
                                     insertionPoint = new XYZ(insertionPoint.X + 10, insertionPoint.Y, 0);
                                 }
                                 catch (Exception ex)
@@ -351,7 +348,7 @@ namespace effecurved.ViewModels
                             }
                             else
                             {
-                                Log.Warning($"Not enough curves generated for face {_selectedFaces.IndexOf(face) + 1}: {curves?.Count ?? 0} curves");
+                                Log.Warning($"Not enough curves for face {_selectedFaces.IndexOf(face) + 1}: outer={result?.OuterCurves?.Count ?? 0}");
                                 failCount++;
                             }
                         }

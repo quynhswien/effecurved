@@ -31,17 +31,16 @@ namespace effecurved.Examples
                 try
                 {
                     // Unroll the face at origin
-                    List<Curve> curves2D = GeometryUnrollService.Instance.UnrollFace(
+                    var result = GeometryUnrollService.Instance.UnrollFace(
                         face,
                         insertionPoint: XYZ.Zero);
 
-                    Log.Information($"Generated {curves2D.Count} curves from unrolling");
+                    Log.Information($"Generated {result.OuterCurves.Count} outer curves, {result.InnerLoops?.Count ?? 0} inner loop(s)");
 
-                    // Create filled region
                     FilledRegion region = GeometryUnrollService.Instance.CreateFilledRegion(
                         doc,
                         draftingView,
-                        curves2D);
+                        result);
 
                     trans.Commit();
                     Log.Information("Successfully created filled region");
@@ -77,15 +76,14 @@ namespace effecurved.Examples
                         try
                         {
                             // Unroll face at current position
-                            List<Curve> curves2D = GeometryUnrollService.Instance.UnrollFace(
+                            var result = GeometryUnrollService.Instance.UnrollFace(
                                 face,
                                 currentInsertionPoint);
 
-                            // Create filled region for this face
                             GeometryUnrollService.Instance.CreateFilledRegion(
                                 doc,
                                 draftingView,
-                                curves2D);
+                                result);
 
                             // Move insertion point for next face
                             currentInsertionPoint = currentInsertionPoint + new XYZ(spacing, 0, 0);
@@ -207,15 +205,14 @@ namespace effecurved.Examples
                 try
                 {
                     // Unroll with custom insertion point from settings
-                    List<Curve> curves2D = GeometryUnrollService.Instance.UnrollFace(
+                    var result = GeometryUnrollService.Instance.UnrollFace(
                         face,
                         settings.InsertionPoint);
 
-                    // Create filled region with custom type if specified
                     FilledRegion region = GeometryUnrollService.Instance.CreateFilledRegion(
                         doc,
                         draftingView,
-                        curves2D,
+                        result,
                         settings.FillRegionTypeId);
 
                     trans.Commit();

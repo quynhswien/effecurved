@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Autodesk.Revit.DB;
+using effecurved.Models;
 
 namespace effecurved.Services
 {
@@ -16,49 +17,42 @@ namespace effecurved.Services
         private GeometryUnrollService() { }
 
         /// <summary>
-        /// Unrolls a face into 2D curves suitable for drafting view
+        /// Unrolls a face into 2D curves (outer + inner loops for openings).
         /// </summary>
-        /// <param name="face">The face to unroll</param>
-        /// <param name="insertionPoint">Optional insertion point for the unrolled geometry</param>
-        /// <returns>List of 2D curves representing the unrolled face</returns>
-        public List<Curve> UnrollFace(Face face, XYZ insertionPoint = null)
+        public FaceUnrollResult UnrollFace(Face face, XYZ insertionPoint = null)
         {
             Log.Debug("Starting face unroll operation");
-            
             insertionPoint = insertionPoint ?? XYZ.Zero;
-            List<Curve> result2DCurves = new List<Curve>();
-
+            var result = new FaceUnrollResult();
             try
             {
-                // Check face type and apply appropriate unrolling strategy
                 if (IsCylindricalFace(face, out XYZ axis, out XYZ origin, out double radius))
                 {
                     Log.Debug($"Processing cylindrical face with radius: {radius}");
-                    result2DCurves = UnrollCylindricalFaceExact(face, axis, origin, radius, insertionPoint);
+                    result = UnrollCylindricalFaceWithOpenings(face, axis, origin, radius, insertionPoint);
                 }
                 else if (IsConicalFace(face, out axis, out origin, out double halfAngle))
                 {
                     Log.Debug($"Processing conical face with half angle: {halfAngle}");
-                    result2DCurves = UnrollConicalFace(face, axis, origin, halfAngle, insertionPoint);
+                    result.OuterCurves = UnrollConicalFace(face, axis, origin, halfAngle, insertionPoint);
                 }
                 else if (IsPlanarFace(face, out XYZ normal))
                 {
                     Log.Debug("Processing planar face");
-                    result2DCurves = UnrollPlanarFace(face, normal, insertionPoint);
+                    result.OuterCurves = UnrollPlanarFace(face, normal, insertionPoint);
                 }
                 else if (IsRuledSurface(face))
                 {
                     Log.Debug("Processing ruled surface");
-                    result2DCurves = UnrollRuledSurface(face, insertionPoint);
+                    result.OuterCurves = UnrollRuledSurface(face, insertionPoint);
                 }
                 else
                 {
                     Log.Warning("Face type not supported for unrolling");
-                    throw new NotSupportedException("This face type is not supported for unrolling. Only cylindrical, conical, planar, and ruled surfaces are currently supported.");
+                    throw new NotSupportedException("This face type is not supported for unrolling.");
                 }
-
-                Log.Debug($"Unroll operation completed with {result2DCurves.Count} curves");
-                return result2DCurves;
+                Log.Debug($"Unroll completed: outer={result.OuterCurves?.Count ?? 0}, inner loops={result.InnerLoops?.Count ?? 0}");
+                return result;
             }
             catch (Exception ex)
             {
@@ -332,6 +326,67 @@ namespace effecurved.Services
         }
 
         /// <summary>
+        /// Unrolls cylindrical face with outer (exact) + inner loops (openings).
+        /// </summary>
+        private FaceUnrollResult UnrollCylindricalFaceWithOpenings(Face face, XYZ axis, XYZ origin, double radius, XYZ insertionPoint)
+        {
+            var result = new FaceUnrollResult();
+            EdgeArrayArray edgeLoops = face.EdgeLoops;
+            if (edgeLoops.Size == 0) return result;
+            EdgeArray largestLoop = null;
+            int maxEdges = 0;
+            foreach (EdgeArray edgeLoop in edgeLoops)
+            {
+                if (edgeLoop.Size > maxEdges) { maxEdges = edgeLoop.Size; largestLoop = edgeLoop; }
+            }
+            if (largestLoop == null) return result;
+            result.OuterCurves = UnrollCylindricalFaceExact(face, axis, origin, radius, insertionPoint);
+            foreach (EdgeArray loop in edgeLoops)
+            {
+                if (loop == largestLoop) continue;
+                var inner = UnrollCylindricalEdgeLoopTo2D(loop, axis, origin, radius, insertionPoint);
+                if (inner != null && inner.Count >= 3) result.InnerLoops.Add(inner);
+            }
+            if (result.InnerLoops.Count > 0)
+                Log.Debug($"Unroll: {result.InnerLoops.Count} inner loop(s) (openings)");
+            return result;
+        }
+
+        private XYZ ProjectToCylinder2D(XYZ p, XYZ origin, XYZ axis, double radius, XYZ insertionPoint)
+        {
+            XYZ v = p - origin;
+            double height = v.DotProduct(axis);
+            XYZ radial = v - (height * axis);
+            double angle = CalculateAngleFromAxis(radial, axis, XYZ.BasisX);
+            return new XYZ(radius * angle + insertionPoint.X, height + insertionPoint.Y, 0);
+        }
+
+        private List<Curve> UnrollCylindricalEdgeLoopTo2D(EdgeArray edgeArray, XYZ axis, XYZ origin, double radius, XYZ insertionPoint)
+        {
+            List<Edge> sorted = SortEdgesIntoLoop(edgeArray);
+            List<XYZ> points2D = new List<XYZ>();
+            XYZ lastPoint = null;
+            const double tol = 0.1;
+            for (int ei = 0; ei < sorted.Count; ei++)
+            {
+                Curve curve3D = sorted[ei].AsCurve();
+                IList<XYZ> tess = curve3D.Tessellate();
+                if (tess == null || tess.Count == 0) continue;
+                bool reverse = (lastPoint != null && tess.Count > 0 && lastPoint.DistanceTo(tess[tess.Count - 1]) <= tol);
+                int start = (reverse ? tess.Count - 1 : (ei == 0 ? 0 : 1));
+                int end = (reverse ? 0 : tess.Count);
+                int step = (reverse ? -1 : 1);
+                for (int i = start; (reverse && i >= end) || (!reverse && i < end); i += step)
+                {
+                    XYZ pt = ProjectToCylinder2D(tess[i], origin, axis, radius, insertionPoint);
+                    points2D.Add(pt);
+                }
+                lastPoint = tess[reverse ? 0 : tess.Count - 1];
+            }
+            return CreateCurvesFromPoints(points2D);
+        }
+
+        /// <summary>
         /// Unrolls a conical face
         /// </summary>
         private List<Curve> UnrollConicalFace(Face face, XYZ axis, XYZ origin, double halfAngle, XYZ insertionPoint)
@@ -575,9 +630,9 @@ namespace effecurved.Services
                     XYZ candidateStart = candidateCurve.GetEndPoint(0);
                     XYZ candidateEnd = candidateCurve.GetEndPoint(1);
                     
-                    // Check if candidate connects to last edge
-                    if (lastEndPoint.IsAlmostEqualTo(candidateStart, 0.01) || 
-                        lastEndPoint.IsAlmostEqualTo(candidateEnd, 0.01))
+                    // Check if candidate connects to last edge (tolerance 0.1 ft for openings/edit profile)
+                    double tol = 0.1;
+                    if (lastEndPoint.DistanceTo(candidateStart) <= tol || lastEndPoint.DistanceTo(candidateEnd) <= tol)
                     {
                         sortedEdges.Add(candidate);
                         remainingEdges.RemoveAt(i);
@@ -740,16 +795,16 @@ namespace effecurved.Services
                         XYZ startPoint = candidate.GetEndPoint(0);
                         XYZ endPoint = candidate.GetEndPoint(1);
                         
-                        // Check if curve connects to last point
-                        if (lastPoint.IsAlmostEqualTo(startPoint, 0.01))
+                        // Check if curve connects to last point (tolerance 0.1 ft)
+                        double tol = 0.1;
+                        if (lastPoint.DistanceTo(startPoint) <= tol)
                         {
                             sortedCurves.Add(candidate);
                             remainingCurves.RemoveAt(i);
                             found = true;
                             break;
                         }
-                        // Check if reversed curve connects
-                        else if (lastPoint.IsAlmostEqualTo(endPoint, 0.01))
+                        else if (lastPoint.DistanceTo(endPoint) <= tol)
                         {
                             // Create reversed curve
                             Line reversedLine = Line.CreateBound(endPoint, startPoint);
@@ -771,14 +826,14 @@ namespace effecurved.Services
                 XYZ firstPoint = sortedCurves[0].GetEndPoint(0);
                 XYZ finalPoint = sortedCurves[sortedCurves.Count - 1].GetEndPoint(1);
                 
-                if (!firstPoint.IsAlmostEqualTo(finalPoint, 0.01))
+                double gap = firstPoint.DistanceTo(finalPoint);
+                if (gap > 0.1)
                 {
-                    Log.Warning($"Loop not perfectly closed, gap: {firstPoint.DistanceTo(finalPoint)}");
-                    // Try to close the gap if small enough
-                    if (firstPoint.DistanceTo(finalPoint) < 0.1)
-                    {
-                        sortedCurves.Add(Line.CreateBound(finalPoint, firstPoint));
-                    }
+                    Log.Warning($"Loop not perfectly closed, gap: {gap}");
+                }
+                if (gap > 0.001 && gap < 0.1)
+                {
+                    sortedCurves.Add(Line.CreateBound(finalPoint, firstPoint));
                 }
                 
                 // Create curve loop
@@ -799,7 +854,75 @@ namespace effecurved.Services
         }
 
         /// <summary>
-        /// Creates a filled region in a drafting view from curves
+        /// Creates a filled region from face unroll result (outer + inner loops). On failure (e.g. invalid inner loops), retries with outer only.
+        /// </summary>
+        public FilledRegion CreateFilledRegion(Document doc, ViewDrafting draftingView, FaceUnrollResult result, ElementId fillRegionTypeId = null)
+        {
+            if (result?.OuterCurves == null || result.OuterCurves.Count < 3)
+                throw new ArgumentException("FaceUnrollResult must have at least 3 outer curves.");
+            fillRegionTypeId = fillRegionTypeId ?? GetFirstFilledRegionType(doc);
+            if (fillRegionTypeId == null)
+                throw new InvalidOperationException("No filled region types found in the document");
+
+            List<Curve> flatOuter = FlattenToZ0IfNeeded(result.OuterCurves);
+            CurveLoop outerLoop = CreateCurveLoop(flatOuter);
+            if (!outerLoop.IsCounterclockwise(XYZ.BasisZ)) outerLoop.Flip();
+
+            List<CurveLoop> curveLoops = new List<CurveLoop> { outerLoop };
+            if (result.InnerLoops != null)
+            {
+                foreach (List<Curve> innerCurves in result.InnerLoops)
+                {
+                    if (innerCurves == null || innerCurves.Count < 3) continue;
+                    try
+                    {
+                        CurveLoop innerLoop = CreateCurveLoop(FlattenToZ0IfNeeded(innerCurves));
+                        if (innerLoop.IsOpen()) { Log.Warning("Skipping open inner loop (opening)"); continue; }
+                        if (innerLoop.IsCounterclockwise(XYZ.BasisZ)) innerLoop.Flip();
+                        curveLoops.Add(innerLoop);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "Skipping invalid inner loop");
+                    }
+                }
+            }
+
+            try
+            {
+                return FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, curveLoops);
+            }
+            catch (Exception)
+            {
+                Log.Warning("FilledRegion with inner loops failed, retrying with outer boundary only");
+                curveLoops = new List<CurveLoop> { outerLoop };
+                FilledRegion filledRegion = FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, curveLoops);
+                Log.Debug($"Created filled region (outer only) in view {draftingView.Name}");
+                return filledRegion;
+            }
+        }
+
+        private List<Curve> FlattenToZ0IfNeeded(List<Curve> curves)
+        {
+            if (curves == null || curves.Count == 0) return curves;
+            double minZ = double.MaxValue, maxZ = double.MinValue;
+            foreach (Curve c in curves)
+            {
+                minZ = Math.Min(minZ, Math.Min(c.GetEndPoint(0).Z, c.GetEndPoint(1).Z));
+                maxZ = Math.Max(maxZ, Math.Max(c.GetEndPoint(0).Z, c.GetEndPoint(1).Z));
+            }
+            if (Math.Abs(maxZ - minZ) <= 0.001 && Math.Abs(minZ) <= 0.001) return curves;
+            var flat = new List<Curve>();
+            foreach (Curve c in curves)
+            {
+                XYZ p1 = c.GetEndPoint(0), p2 = c.GetEndPoint(1);
+                flat.Add(Line.CreateBound(new XYZ(p1.X, p1.Y, 0), new XYZ(p2.X, p2.Y, 0)));
+            }
+            return flat;
+        }
+
+        /// <summary>
+        /// Creates a filled region in a drafting view from curves (outer only).
         /// </summary>
         public FilledRegion CreateFilledRegion(Document doc, ViewDrafting draftingView, List<Curve> curves, ElementId fillRegionTypeId = null)
         {

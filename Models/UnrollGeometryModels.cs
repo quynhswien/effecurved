@@ -81,6 +81,16 @@ namespace effecurved.Models
     }
 
     /// <summary>
+    /// Result of unrolling a single face: outer boundary + inner loops (openings).
+    /// </summary>
+    public class FaceUnrollResult
+    {
+        public List<Curve> OuterCurves { get; set; } = new List<Curve>();
+        public List<List<Curve>> InnerLoops { get; set; } = new List<List<Curve>>();
+        public bool HasOpenings => InnerLoops != null && InnerLoops.Count > 0;
+    }
+
+    /// <summary>
     /// Statistics about an unroll operation
     /// </summary>
     public class UnrollStatistics
