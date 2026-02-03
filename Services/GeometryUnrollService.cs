@@ -310,7 +310,7 @@ namespace effecurved.Services
             double ox = insertionPoint.X;
             double oy = insertionPoint.Y;
             double z = 0;
-            
+            // Y: 3D axis up = 2D Y up (không lật)
             XYZ p0 = new XYZ(ox, oy, z);
             XYZ p1 = new XYZ(ox + width, oy, z);
             XYZ p2 = new XYZ(ox + width, oy + height, z);
@@ -321,12 +321,13 @@ namespace effecurved.Services
             curves2D.Add(Line.CreateBound(p2, p3));
             curves2D.Add(Line.CreateBound(p3, p0));
             
-            Log.Debug($"Unroll (exact): width={width} (arc length), height={height} (axis length) — no tessellation");
+            Log.Debug($"Unroll (exact): width={width}, height={height} — no tessellation");
             return curves2D;
         }
 
         /// <summary>
-        /// Unrolls cylindrical face with outer (exact) + inner loops (openings).
+        /// Unrolls cylindrical face with outer + inner loops (openings).
+        /// When outer has 4 edges use exact rectangle; when outer has more than 4 edges (edit profile, cutting blocks) tessellate to preserve complex shape.
         /// </summary>
         private FaceUnrollResult UnrollCylindricalFaceWithOpenings(Face face, XYZ axis, XYZ origin, double radius, XYZ insertionPoint)
         {
@@ -340,7 +341,21 @@ namespace effecurved.Services
                 if (edgeLoop.Size > maxEdges) { maxEdges = edgeLoop.Size; largestLoop = edgeLoop; }
             }
             if (largestLoop == null) return result;
-            result.OuterCurves = UnrollCylindricalFaceExact(face, axis, origin, radius, insertionPoint);
+
+            // Complex profile (edit profile, cutting blocks): outer has more than 4 edges → tessellate outer
+            if (largestLoop.Size > 4)
+            {
+                Log.Debug($"Complex cylindrical profile: {largestLoop.Size} edges, using tessellation for outer boundary");
+                var outer = UnrollCylindricalEdgeLoopTo2D(largestLoop, axis, origin, radius, insertionPoint);
+                if (outer == null || outer.Count < 3)
+                    throw new InvalidOperationException("Could not form a valid closed boundary for the complex profile. The edge loop may have gaps or non-manifold geometry.");
+                result.OuterCurves = outer;
+            }
+            else
+            {
+                result.OuterCurves = UnrollCylindricalFaceExact(face, axis, origin, radius, insertionPoint);
+            }
+
             foreach (EdgeArray loop in edgeLoops)
             {
                 if (loop == largestLoop) continue;
@@ -358,12 +373,17 @@ namespace effecurved.Services
             double height = v.DotProduct(axis);
             XYZ radial = v - (height * axis);
             double angle = CalculateAngleFromAxis(radial, axis, XYZ.BasisX);
-            return new XYZ(radius * angle + insertionPoint.X, height + insertionPoint.Y, 0);
+            return new XYZ(radius * angle + insertionPoint.X, insertionPoint.Y + height, 0);
         }
 
         private List<Curve> UnrollCylindricalEdgeLoopTo2D(EdgeArray edgeArray, XYZ axis, XYZ origin, double radius, XYZ insertionPoint)
         {
             List<Edge> sorted = SortEdgesIntoLoop(edgeArray);
+            if (sorted.Count != edgeArray.Size)
+            {
+                Log.Warning($"Edge loop sort incomplete: {sorted.Count}/{edgeArray.Size} edges in order; skipping this boundary");
+                return null;
+            }
             List<XYZ> points2D = new List<XYZ>();
             XYZ lastPoint = null;
             const double tol = 0.1;
@@ -595,62 +615,132 @@ namespace effecurved.Services
         }
 
         /// <summary>
-        /// Sorts edges from an EdgeArray into a continuous loop
+        /// Sorts edges from an EdgeArray into a continuous loop using graph traversal.
+        /// Merges endpoints within tolerance so complex/trimmed profiles form a single cycle.
         /// </summary>
         private List<Edge> SortEdgesIntoLoop(EdgeArray edgeArray)
         {
-            List<Edge> sortedEdges = new List<Edge>();
-            List<Edge> remainingEdges = new List<Edge>();
-            
-            // Convert EdgeArray to List
+            List<Edge> edges = new List<Edge>();
             foreach (Edge edge in edgeArray)
+                edges.Add(edge);
+            if (edges.Count == 0) return edges;
+
+            // Try increasing vertex merge tolerances (Revit units, often feet)
+            double[] vertexTolerances = { 1e-6, 0.001, 0.01, 0.1, 0.5 };
+            foreach (double vtol in vertexTolerances)
             {
-                remainingEdges.Add(edge);
-            }
-            
-            if (remainingEdges.Count == 0)
-                return sortedEdges;
-            
-            // Start with first edge
-            sortedEdges.Add(remainingEdges[0]);
-            remainingEdges.RemoveAt(0);
-            
-            // Find connecting edges
-            while (remainingEdges.Count > 0)
-            {
-                Edge lastEdge = sortedEdges[sortedEdges.Count - 1];
-                Curve lastCurve = lastEdge.AsCurve();
-                XYZ lastEndPoint = lastCurve.GetEndPoint(1);
-                
-                bool found = false;
-                for (int i = 0; i < remainingEdges.Count; i++)
+                List<Edge> result = SortEdgesIntoLoopWithTolerance(edges, vtol);
+                if (result != null && result.Count == edges.Count)
                 {
-                    Edge candidate = remainingEdges[i];
-                    Curve candidateCurve = candidate.AsCurve();
-                    XYZ candidateStart = candidateCurve.GetEndPoint(0);
-                    XYZ candidateEnd = candidateCurve.GetEndPoint(1);
-                    
-                    // Check if candidate connects to last edge (tolerance 0.1 ft for openings/edit profile)
-                    double tol = 0.1;
-                    if (lastEndPoint.DistanceTo(candidateStart) <= tol || lastEndPoint.DistanceTo(candidateEnd) <= tol)
-                    {
-                        sortedEdges.Add(candidate);
-                        remainingEdges.RemoveAt(i);
-                        found = true;
-                        break;
-                    }
+                    if (vtol > 0.01) Log.Debug($"SortEdgesIntoLoop used vertex tolerance {vtol}");
+                    return result;
                 }
-                
+            }
+
+            // Fallback: greedy chain without appending disconnected edges (avoids invalid self-intersecting loop)
+            List<Edge> sorted = new List<Edge>();
+            List<Edge> remaining = new List<Edge>(edges);
+            sorted.Add(remaining[0]);
+            remaining.RemoveAt(0);
+            double[] tolList = { 0.001, 0.01, 0.1, 0.5, 1.0, 2.0 };
+            while (remaining.Count > 0)
+            {
+                Curve lastC = sorted[sorted.Count - 1].AsCurve();
+                XYZ lastEnd = lastC.GetEndPoint(1);
+                bool found = false;
+                foreach (double tol in tolList)
+                {
+                    for (int i = 0; i < remaining.Count; i++)
+                    {
+                        Curve c = remaining[i].AsCurve();
+                        if (lastEnd.DistanceTo(c.GetEndPoint(0)) <= tol || lastEnd.DistanceTo(c.GetEndPoint(1)) <= tol)
+                        {
+                            sorted.Add(remaining[i]);
+                            remaining.RemoveAt(i);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (found) break;
+                }
                 if (!found)
                 {
-                    Log.Warning($"Could not find connecting edge, {remainingEdges.Count} edges remaining");
-                    // Add remaining edges anyway to avoid infinite loop
-                    sortedEdges.AddRange(remainingEdges);
-                    break;
+                    Log.Warning($"Could not find connecting edge, {remaining.Count} edges remaining; returning partial loop (no FilledRegion for this boundary)");
+                    return sorted; // do not append remaining — partial loop is still invalid but avoids wrong geometry
                 }
             }
-            
-            return sortedEdges;
+            return sorted;
+        }
+
+        /// <summary>
+        /// Builds a single closed loop from edges by merging vertices within vtol and traversing the cycle.
+        /// Returns null if the graph is not a single cycle (e.g. degree != 2 or multiple components).
+        /// </summary>
+        private List<Edge> SortEdgesIntoLoopWithTolerance(List<Edge> edges, double vtol)
+        {
+            int n = edges.Count;
+            List<XYZ> vertices = new List<XYZ>();
+
+            int VertexIndex(XYZ p)
+            {
+                for (int i = 0; i < vertices.Count; i++)
+                    if (p.DistanceTo(vertices[i]) <= vtol) return i;
+                vertices.Add(p);
+                return vertices.Count - 1;
+            }
+
+            var validIndices = new List<int>();
+            var edgeVertices = new List<(int v0, int v1)>();
+            for (int i = 0; i < n; i++)
+            {
+                Curve c = edges[i].AsCurve();
+                int v0 = VertexIndex(c.GetEndPoint(0));
+                int v1 = VertexIndex(c.GetEndPoint(1));
+                if (v0 == v1) continue;
+                validIndices.Add(i);
+                edgeVertices.Add((v0, v1));
+            }
+            int m = validIndices.Count;
+            if (m != n) return null;
+
+            // Adjacency: for each vertex, list of (local edge index 0..m-1, otherVertex)
+            var adj = new Dictionary<int, List<(int edgeIdx, int other)>>();
+            for (int i = 0; i < m; i++)
+            {
+                int v0 = edgeVertices[i].v0, v1 = edgeVertices[i].v1;
+                if (!adj.ContainsKey(v0)) adj[v0] = new List<(int, int)>();
+                if (!adj.ContainsKey(v1)) adj[v1] = new List<(int, int)>();
+                adj[v0].Add((i, v1));
+                adj[v1].Add((i, v0));
+            }
+
+            foreach (var kv in adj)
+                if (kv.Value.Count != 2) return null;
+
+            var sorted = new List<Edge>();
+            int currentVertex = edgeVertices[0].v1;
+            var used = new HashSet<int> { 0 };
+            sorted.Add(edges[validIndices[0]]);
+
+            while (sorted.Count < m)
+            {
+                int nextEdge = -1;
+                int nextVertex = -1;
+                foreach (var (edgeIdx, other) in adj[currentVertex])
+                {
+                    if (used.Contains(edgeIdx)) continue;
+                    nextEdge = edgeIdx;
+                    nextVertex = other;
+                    break;
+                }
+                if (nextEdge < 0) return null;
+                used.Add(nextEdge);
+                sorted.Add(edges[validIndices[nextEdge]]);
+                currentVertex = nextVertex;
+            }
+
+            if (currentVertex != edgeVertices[0].v0) return null;
+            return sorted;
         }
 
         /// <summary>
@@ -894,11 +984,14 @@ namespace effecurved.Services
             }
             catch (Exception)
             {
-                Log.Warning("FilledRegion with inner loops failed, retrying with outer boundary only");
-                curveLoops = new List<CurveLoop> { outerLoop };
-                FilledRegion filledRegion = FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, curveLoops);
-                Log.Debug($"Created filled region (outer only) in view {draftingView.Name}");
-                return filledRegion;
+                // Complex profile + openings: nếu inner loops gây lỗi (self-intersect, etc.), thử chỉ outer (vẫn là hình phức tạp, không phải rectangle)
+                if (curveLoops.Count > 1)
+                {
+                    Log.Warning("FilledRegion with inner loops failed, retrying with outer boundary only (complex profile preserved)");
+                    curveLoops = new List<CurveLoop> { outerLoop };
+                    return FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, curveLoops);
+                }
+                throw;
             }
         }
 
