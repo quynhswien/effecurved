@@ -230,14 +230,10 @@ namespace effecurved.Services
                     XYZ radialVector = vectorToPoint - (height * axis);
                     double angle = CalculateAngleFromAxis(radialVector, axis, XYZ.BasisX);
                     
-                    // Convert to 2D coordinates
-                    // X = arc length = radius * angle
-                    // Y = height along axis
+                    // Convert to 2D coordinates: X = arc length, Y = height (flipped so not rotated 180°)
                     double x = radius * angle;
                     double y = height;
-                    
-                    // CRITICAL: Force Z = 0 for drafting view (must be planar)
-                    XYZ point2D = new XYZ(x + insertionPoint.X, y + insertionPoint.Y, 0);
+                    XYZ point2D = new XYZ(x + insertionPoint.X, insertionPoint.Y - y, 0);
                     points2D.Add(point2D);
                 }
             }
@@ -310,11 +306,11 @@ namespace effecurved.Services
             double ox = insertionPoint.X;
             double oy = insertionPoint.Y;
             double z = 0;
-            // Y: 3D axis up = 2D Y up (không lật)
+            // Y flipped so 3D top → 2D top (no 180° rotation)
             XYZ p0 = new XYZ(ox, oy, z);
             XYZ p1 = new XYZ(ox + width, oy, z);
-            XYZ p2 = new XYZ(ox + width, oy + height, z);
-            XYZ p3 = new XYZ(ox, oy + height, z);
+            XYZ p2 = new XYZ(ox + width, oy - height, z);
+            XYZ p3 = new XYZ(ox, oy - height, z);
             
             curves2D.Add(Line.CreateBound(p0, p1));
             curves2D.Add(Line.CreateBound(p1, p2));
@@ -367,13 +363,14 @@ namespace effecurved.Services
             return result;
         }
 
+        /// <summary>Project 3D point on cylinder to 2D unrolled coords. Y flipped so orientation matches expected (no 180° rotation).</summary>
         private XYZ ProjectToCylinder2D(XYZ p, XYZ origin, XYZ axis, double radius, XYZ insertionPoint)
         {
             XYZ v = p - origin;
             double height = v.DotProduct(axis);
             XYZ radial = v - (height * axis);
             double angle = CalculateAngleFromAxis(radial, axis, XYZ.BasisX);
-            return new XYZ(radius * angle + insertionPoint.X, insertionPoint.Y + height, 0);
+            return new XYZ(radius * angle + insertionPoint.X, insertionPoint.Y - height, 0);
         }
 
         private List<Curve> UnrollCylindricalEdgeLoopTo2D(EdgeArray edgeArray, XYZ axis, XYZ origin, double radius, XYZ insertionPoint)
@@ -984,12 +981,27 @@ namespace effecurved.Services
             }
             catch (Exception)
             {
-                // Complex profile + openings: nếu inner loops gây lỗi (self-intersect, etc.), thử chỉ outer (vẫn là hình phức tạp, không phải rectangle)
+                // Complex profile + openings: nếu inner loops gây lỗi (self-intersect, etc.), thử chỉ outer rồi vẽ void bằng DetailCurve
                 if (curveLoops.Count > 1)
                 {
-                    Log.Warning("FilledRegion with inner loops failed, retrying with outer boundary only (complex profile preserved)");
+                    Log.Warning("FilledRegion with inner loops failed, retrying with outer boundary only; drawing inner voids as detail lines");
                     curveLoops = new List<CurveLoop> { outerLoop };
-                    return FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, curveLoops);
+                    FilledRegion region = FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, curveLoops);
+                    // Vẽ đường void bên trong bằng DetailCurve để user có thể chỉnh sửa
+                    if (result.InnerLoops != null)
+                    {
+                        foreach (List<Curve> innerCurves in result.InnerLoops)
+                        {
+                            if (innerCurves == null || innerCurves.Count < 3) continue;
+                            List<Curve> flatInner = FlattenToZ0IfNeeded(innerCurves);
+                            foreach (Curve c in flatInner)
+                            {
+                                if (c == null || c.Length < 0.001) continue;
+                                try { doc.Create.NewDetailCurve(draftingView, c); } catch (Exception ex) { Log.Warning(ex, "DetailCurve for inner void"); }
+                            }
+                        }
+                    }
+                    return region;
                 }
                 throw;
             }
