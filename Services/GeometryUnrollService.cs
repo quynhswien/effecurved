@@ -981,27 +981,81 @@ namespace effecurved.Services
             }
             catch (Exception)
             {
-                // Complex profile + openings: nếu inner loops gây lỗi (self-intersect, etc.), thử chỉ outer rồi vẽ void bằng DetailCurve
+                // Inner loops gây lỗi: tạo FilledRegion chỉ outer, vẽ DetailCurve cho void, rồi thử tạo void từ các đường đó
                 if (curveLoops.Count > 1)
                 {
-                    Log.Warning("FilledRegion with inner loops failed, retrying with outer boundary only; drawing inner voids as detail lines");
-                    curveLoops = new List<CurveLoop> { outerLoop };
-                    FilledRegion region = FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, curveLoops);
-                    // Vẽ đường void bên trong bằng DetailCurve để user có thể chỉnh sửa
+                    Log.Warning("FilledRegion with inner loops failed; creating outer only, then drawing inner as detail lines and retrying voids from those curves");
+                    FilledRegion regionOuterOnly = FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, new List<CurveLoop> { outerLoop });
+                    var detailCurvesByLoop = new List<List<CurveElement>>();
                     if (result.InnerLoops != null)
                     {
                         foreach (List<Curve> innerCurves in result.InnerLoops)
                         {
                             if (innerCurves == null || innerCurves.Count < 3) continue;
                             List<Curve> flatInner = FlattenToZ0IfNeeded(innerCurves);
+                            var oneLoop = new List<CurveElement>();
                             foreach (Curve c in flatInner)
                             {
                                 if (c == null || c.Length < 0.001) continue;
-                                try { doc.Create.NewDetailCurve(draftingView, c); } catch (Exception ex) { Log.Warning(ex, "DetailCurve for inner void"); }
+                                try
+                                {
+                                    var dc = doc.Create.NewDetailCurve(draftingView, c) as CurveElement;
+                                    if (dc != null) oneLoop.Add(dc);
+                                }
+                                catch (Exception ex) { Log.Warning(ex, "DetailCurve for inner void"); }
                             }
+                            if (oneLoop.Count >= 3) detailCurvesByLoop.Add(oneLoop);
                         }
                     }
-                    return region;
+
+                    // Tạo void từ geometry của các DetailCurve (clone curve để không phụ thuộc element sau khi xóa)
+                    var innerLoopsFromDetail = new List<CurveLoop>();
+                    var savedCurvesPerLoop = new List<List<Curve>>();
+                    foreach (var dcList in detailCurvesByLoop)
+                    {
+                        var curvesFromDetail = new List<Curve>();
+                        foreach (CurveElement ce in dcList)
+                        {
+                            Curve geom = ce?.GeometryCurve;
+                            if (geom != null && geom.Length >= 0.001)
+                                curvesFromDetail.Add(Line.CreateBound(geom.GetEndPoint(0), geom.GetEndPoint(1)));
+                        }
+                        savedCurvesPerLoop.Add(curvesFromDetail);
+                        if (curvesFromDetail.Count < 3) continue;
+                        try
+                        {
+                            CurveLoop loop = CreateCurveLoop(curvesFromDetail);
+                            if (loop != null && !loop.IsOpen())
+                            {
+                                if (loop.IsCounterclockwise(XYZ.BasisZ)) loop.Flip();
+                                innerLoopsFromDetail.Add(loop);
+                            }
+                        }
+                        catch (Exception ex) { Log.Warning(ex, "CurveLoop from detail curves"); }
+                    }
+
+                    if (innerLoopsFromDetail.Count > 0)
+                    {
+                        doc.Delete(regionOuterOnly.Id);
+                        foreach (var dcList in detailCurvesByLoop)
+                            foreach (CurveElement ce in dcList) doc.Delete(ce.Id);
+                        var withVoids = new List<CurveLoop> { outerLoop };
+                        withVoids.AddRange(innerLoopsFromDetail);
+                        try
+                        {
+                            return FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, withVoids);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Warning(ex, "FilledRegion with voids from detail curves failed; recreating outer only and redrawing detail lines");
+                            regionOuterOnly = FilledRegion.Create(doc, fillRegionTypeId, draftingView.Id, new List<CurveLoop> { outerLoop });
+                            foreach (var curves in savedCurvesPerLoop)
+                                foreach (Curve c in curves)
+                                { try { if (c != null && c.Length >= 0.001) doc.Create.NewDetailCurve(draftingView, c); } catch { } }
+                            return regionOuterOnly;
+                        }
+                    }
+                    return regionOuterOnly;
                 }
                 throw;
             }
