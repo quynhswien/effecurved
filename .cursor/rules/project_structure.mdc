@@ -1,0 +1,44 @@
+---
+description: This rule is helpful for define base structure and coding guideline for developing Revit Addin.
+globs: 
+alwaysApply: false
+---
+# Revit Add-in Development Best Practices
+
+## Project Structure
+- Maintain a clear directory structure:
+  - Organize code into folders like `Commands`, `Views`, `Models`, `ViewModels`, `Services`, and `Utils`.
+- Implement appropriate configuration management:
+  - Save configuration to local files if user setting need to be persisted, using services/LocalStorageService.cs
+  - If need to save secure data, using services/SecureStorageService.cs
+
+## Command Development
+- Always create new command under subclass of commands/BaseCommand.cs and implement ExecuteCommand method to inherit licensing check and version check.
+- Use proper transaction management: Encapsulate model modifications within `Transaction` objects to ensure data integrity.
+- Implement comprehensive exception handling: Use try-catch blocks to handle potential exceptions gracefully.
+- Ensure UI threading compliance:
+  - Make sure not blocking whole Revit execution or making Revit crash.
+- Optimize performance:
+  - Minimize performance impacts, especially when iterating over large collections of elements.
+
+## User Interface
+- Develop user interfaces using WPF:
+  - Utilize the Model-View-ViewModel (MVVM) pattern for UI development.
+- Ensure responsive UI:
+  - Implement asynchronous programming practices to keep the UI responsive.
+
+## Documentation
+- Use XML documentation comments:
+  - Provide summaries and parameter descriptions for methods and classes.
+- Implement API documentation:
+  - Generate documentation from XML comments.
+- Keep documentation updated:
+  - Reflect code changes in the documentation.
+- Document error scenarios:
+  - Explain potential errors and their handling.
+- Use proper versioning:
+  - Track changes and maintain compatibility information.
+
+## Resources
+- Revit API Docs:
+  - @Revit API Docs

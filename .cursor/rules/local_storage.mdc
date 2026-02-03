@@ -1,0 +1,59 @@
+---
+description: This rule is helpful when needed to save or load data to local machine
+globs: 
+alwaysApply: false
+---
+
+## How to use LocalStorageService
+Note: Do not change LocalStorageService implementation, just use it.
+
+1. **Create an instance:**
+   ```csharp
+   // Default constructor uses Application.APP_NAME
+   var storage = new LocalStorageService();
+   
+   // Or with custom subfolder
+   var customStorage = new LocalStorageService("CustomFolder");
+   
+   // For nested folders
+   var nestedStorage = new LocalStorageService(Path.Combine("Parent", "Child"));
+   ```
+
+2. **Save data:**
+   ```csharp
+   // Save object as JSON
+   await storage.SaveDataAsync("settings.json", settingsObject);
+   
+   // Check result
+   bool success = await storage.SaveDataAsync("data.json", dataObject);
+   if (success) { /* Handle success */ }
+   ```
+
+3. **Load data:**
+   ```csharp
+   // Load object from JSON
+   var settings = await storage.LoadDataAsync<UserSettings>("settings.json");
+   
+   // Returns default(T) if file doesn't exist
+   var data = await storage.LoadDataAsync<List<Item>>("items.json");
+   ```
+
+4. **File operations:**
+   ```csharp
+   // Check if file exists
+   if (storage.FileExists("config.json")) { /* File exists */ }
+   
+   // Delete a file
+   storage.DeleteFile("temp.json");
+   
+   // Get full path for a file
+   string path = storage.GetFilePath("data.json");
+   ```
+
+5. **Access base path:**
+   ```csharp
+   // Get storage directory path
+   string basePath = storage.BasePath;
+   ```
+
+Files are stored in `%LocalAppData%\EFFE\[AppName]` by default.

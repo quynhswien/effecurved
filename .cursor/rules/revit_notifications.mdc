@@ -1,0 +1,147 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Using the RevitNotificationHandler
+
+## Overview
+
+The `RevitNotificationHandler` is designed to safely display notifications to users from any thread, including background tasks. It uses Revit's `ExternalEvent` pattern to ensure all UI operations occur on the main Revit thread, preventing "Revit API running out of context" errors.
+
+## When to Use
+
+Use the `RevitNotificationHandler` whenever you need to:
+- Show notifications from background threads
+- Display version update notifications
+- Show license warnings
+- Present general information to users
+
+## Available Notification Types
+
+1. **Version Update Notifications**: For notifying users about new versions
+2. **License Warnings**: For alerting users about license issues
+3. **General Messages**: For any other user notifications
+
+## Basic Usage
+
+### Initialization
+
+The notification handler is automatically initialized during application startup. You don't need to initialize it manually.
+
+### Showing Notifications
+
+```csharp
+// Get the instance
+var notificationHandler = RevitNotificationHandler.Instance;
+
+// Show a version update notification
+notificationHandler.ShowVersionUpdateNotification(versionInfo);
+
+// Show a license warning
+notificationHandler.ShowLicenseWarningNotification("Your license will expire in 10 days");
+
+// Show a general message
+notificationHandler.ShowGeneralNotification("Information", "Operation completed successfully");
+```
+
+## Usage in Background Tasks
+
+When executing background tasks, such as checking for updates or validating licenses, use the notification handler to safely show UI dialogs:
+
+```csharp
+RunBackgroundTask(async token => 
+{
+    try 
+    {
+        // Perform background work...
+        var result = await SomeAsyncOperation();
+        
+        if (result != null && !token.IsCancellationRequested)
+        {
+            // Show notification from background thread
+            RevitNotificationHandler.Instance.ShowGeneralNotification(
+                "Operation Complete", 
+                "Your task completed successfully"
+            );
+        }
+    }
+    catch (Exception ex)
+    {
+        // Show error notification
+        RevitNotificationHandler.Instance.ShowGeneralNotification(
+            "Error", 
+            $"An error occurred: {ex.Message}"
+        );
+        
+        // Log the error
+        Log.Error(ex, "Error in background task");
+    }
+});
+```
+
+## Creating Custom Notifications
+
+For advanced scenarios, you can create and queue custom notifications:
+
+```csharp
+// Create a custom notification
+var customNotification = new CustomNotification(); // Must inherit from NotificationBase
+
+// Queue the notification
+RevitNotificationHandler.Instance.ShowNotification(customNotification);
+```
+
+## Best Practices
+
+1. **Threading**: Always use the notification handler when showing UI from background threads.
+
+2. **Cancellation**: Check cancellation tokens before showing notifications to avoid unnecessary UI updates:
+   ```csharp
+   if (!token.IsCancellationRequested)
+   {
+       RevitNotificationHandler.Instance.ShowGeneralNotification(title, message);
+   }
+   ```
+
+3. **Message Content**: Keep notification messages clear and concise.
+
+4. **Error Handling**: Wrap notification calls in try-catch blocks when used in critical operations.
+
+5. **Performance**: Don't overuse notifications; only show important information to avoid annoying users.
+
+## Implementation Details
+
+The notification handler uses a thread-safe queue to manage multiple notifications and processes them sequentially on the main Revit thread. This ensures that:
+
+1. All UI operations respect Revit's threading model
+2. Notifications don't interfere with each other
+3. Background operations can continue without blocking
+
+## Example: Showing Progress Updates
+
+```csharp
+// From a background task
+for (int i = 0; i < 100; i += 10)
+{
+    await SomeOperation();
+    
+    if (i % 20 == 0 && !token.IsCancellationRequested)
+    {
+        RevitNotificationHandler.Instance.ShowGeneralNotification(
+            "Progress", 
+            $"Operation is {i}% complete"
+        );
+    }
+}
+
+// Final notification
+if (!token.IsCancellationRequested)
+{
+    RevitNotificationHandler.Instance.ShowGeneralNotification(
+        "Complete", 
+        "Operation finished successfully"
+    );
+}
+```
+

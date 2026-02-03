@@ -1,0 +1,246 @@
+<Window x:Class="effecurved.Views.UnrollCurvedSurfaceView"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:converters="clr-namespace:effecurved.Views.Converters"
+        Title="Unroll Curved Surface" 
+        Height="550" 
+        Width="550"
+        MinHeight="550"
+        MinWidth="550"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="CanResize"
+        ShowInTaskbar="False">
+    
+    <Window.Resources>
+        <converters:InverseBooleanConverter x:Key="InverseBooleanConverter"/>
+        <converters:BoolVisibilityConverter x:Key="BoolVisibilityConverter"/>
+        
+        <Style TargetType="GroupBox">
+            <Setter Property="Margin" Value="5"/>
+            <Setter Property="Padding" Value="10"/>
+            <Setter Property="BorderBrush" Value="#CCCCCC"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="10,5"/>
+            <Setter Property="Margin" Value="5"/>
+            <Setter Property="MinWidth" Value="100"/>
+        </Style>
+        
+        <Style TargetType="RadioButton">
+            <Setter Property="Margin" Value="5,5,5,10"/>
+        </Style>
+        
+        <Style TargetType="TextBox">
+            <Setter Property="Padding" Value="5"/>
+            <Setter Property="Margin" Value="5"/>
+        </Style>
+        
+        <Style TargetType="ComboBox">
+            <Setter Property="Padding" Value="5"/>
+            <Setter Property="Margin" Value="5"/>
+        </Style>
+    </Window.Resources>
+    
+    <Grid Margin="15">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*" MinHeight="120"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <!-- Header -->
+        <Border Grid.Row="0" 
+                Background="#F0F0F0"
+                Padding="10"
+                Margin="0,0,0,10"
+                CornerRadius="4">
+            <TextBlock Text="Unroll Curved Surfaces to Drafting View"
+                       FontSize="16"
+                       FontWeight="Bold"
+                       HorizontalAlignment="Center"/>
+        </Border>
+        
+        <!-- Geometry Selection -->
+        <GroupBox Grid.Row="1" Header="1. Select Geometry" Padding="10">
+            <StackPanel>
+                <TextBlock Text="Click button below to select faces or curves from your model:"
+                          Margin="0,0,0,8"
+                          TextWrapping="Wrap"/>
+                
+                <Button Content="📐 Select Geometry" 
+                        Command="{Binding SelectGeometryCommand}"
+                        IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}"
+                        HorizontalAlignment="Stretch"
+                        Height="35"
+                        FontSize="13"
+                        Margin="0,0,0,8"/>
+                
+                <Border Background="#E8F5E9" 
+                        Padding="8" 
+                        CornerRadius="3">
+                    <TextBlock Text="{Binding SelectedGeometryInfo}"
+                              FontWeight="SemiBold"
+                              Foreground="#2E7D32"
+                              TextWrapping="Wrap"/>
+                </Border>
+            </StackPanel>
+        </GroupBox>
+        
+        <!-- Drafting View Selection -->
+        <GroupBox Grid.Row="2" Header="2. Select Target Drafting View" Padding="10">
+            <StackPanel>
+                <!-- Create New View Option -->
+                <RadioButton Content="Create New Drafting View"
+                            IsChecked="{Binding CreateNewView}"
+                            IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}"
+                            FontWeight="Medium"
+                            Margin="0,0,0,8"/>
+                
+                <Grid IsEnabled="{Binding CreateNewView}" Margin="20,0,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="View Name:" 
+                              VerticalAlignment="Center"
+                              Margin="0,0,10,0"/>
+                    <TextBox Grid.Column="1"
+                            Text="{Binding NewViewName, UpdateSourceTrigger=PropertyChanged}"
+                            Padding="6"
+                            VerticalContentAlignment="Center"/>
+                </Grid>
+                
+                <!-- Use Existing View Option -->
+                <RadioButton Content="Use Existing Drafting View"
+                            IsChecked="{Binding UseExistingView}"
+                            IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}"
+                            FontWeight="Medium"
+                            Margin="0,15,0,8"/>
+                
+                <ComboBox ItemsSource="{Binding DraftingViews}"
+                         SelectedItem="{Binding SelectedDraftingView}"
+                         DisplayMemberPath="Name"
+                         IsEnabled="{Binding UseExistingView}"
+                         Padding="6"
+                         Margin="20,0,0,0"/>
+            </StackPanel>
+        </GroupBox>
+        
+        <!-- Info Text -->
+        <GroupBox Grid.Row="3" Header="Information">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock TextWrapping="Wrap" Margin="5">
+                        <Run FontWeight="Bold">Supported Geometry:</Run>
+                        <LineBreak/>
+                        • Cylindrical faces
+                        <LineBreak/>
+                        • Conical faces
+                        <LineBreak/>
+                        • Planar faces
+                        <LineBreak/>
+                        • Ruled surfaces
+                        <LineBreak/>
+                        <LineBreak/>
+                        <Run FontWeight="Bold">How it works:</Run>
+                        <LineBreak/>
+                        1. Select curved faces or edges from your model
+                        <LineBreak/>
+                        2. Choose or create a drafting view
+                        <LineBreak/>
+                        3. The tool will unroll the 3D geometry into 2D
+                        <LineBreak/>
+                        4. A filled region will be created in the drafting view
+                        <LineBreak/>
+                        <LineBreak/>
+                        <Run FontWeight="Bold">Status:</Run>
+                        <Run Text="{Binding StatusMessage}" FontStyle="Italic"/>
+                    </TextBlock>
+                </StackPanel>
+            </ScrollViewer>
+        </GroupBox>
+        
+        <!-- Action Buttons -->
+        <Border Grid.Row="4" 
+                BorderThickness="0,1,0,0"
+                BorderBrush="#E0E0E0"
+                Padding="0,15,0,0"
+                Margin="0,15,0,0">
+            <StackPanel Orientation="Horizontal" 
+                       HorizontalAlignment="Right">
+                <Button Content="✓ Process" 
+                        Command="{Binding ProcessCommand}"
+                        IsDefault="True"
+                        MinWidth="120"
+                        Height="35"
+                        FontSize="13"
+                        FontWeight="SemiBold"
+                        Background="#4CAF50"
+                        Foreground="White"
+                        BorderThickness="0"
+                        Margin="0,0,10,0">
+                    <Button.Style>
+                        <Style TargetType="Button">
+                            <Setter Property="Background" Value="#4CAF50"/>
+                            <Setter Property="Foreground" Value="White"/>
+                            <Setter Property="BorderThickness" Value="0"/>
+                            <Setter Property="Cursor" Value="Hand"/>
+                            <Style.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background" Value="#45A049"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Background" Value="#CCCCCC"/>
+                                    <Setter Property="Cursor" Value="Arrow"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+                <Button Content="✕ Cancel" 
+                        Command="{Binding CancelCommand}"
+                        IsCancel="True"
+                        MinWidth="120"
+                        Height="35"
+                        FontSize="13"
+                        Background="#F5F5F5"
+                        Foreground="#333333"
+                        BorderBrush="#CCCCCC"
+                        BorderThickness="1">
+                    <Button.Style>
+                        <Style TargetType="Button">
+                            <Setter Property="Cursor" Value="Hand"/>
+                            <Style.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Background" Value="#E0E0E0"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+            </StackPanel>
+        </Border>
+        
+        <!-- Processing Overlay -->
+        <Grid Grid.Row="0" 
+              Grid.RowSpan="5"
+              Background="#80000000"
+              Visibility="{Binding IsProcessing, Converter={StaticResource BoolVisibilityConverter}}">
+            <StackPanel VerticalAlignment="Center" 
+                       HorizontalAlignment="Center">
+                <ProgressBar IsIndeterminate="True" 
+                            Width="200" 
+                            Height="20"
+                            Margin="10"/>
+                <TextBlock Text="Processing..." 
+                          Foreground="White"
+                          FontSize="14"
+                          HorizontalAlignment="Center"/>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

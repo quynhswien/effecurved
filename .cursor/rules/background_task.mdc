@@ -1,0 +1,119 @@
+---
+description: This rule is helpful when need to run heavy task which required no access to Revit Context and trigger result back.
+globs: 
+alwaysApply: false
+---
+
+## BackgroundTaskService Usage
+
+```csharp
+// Run a task in the background
+BackgroundTaskService.Instance.RunBackgroundTask(async token => 
+{
+    try
+    {
+        // Perform background work here
+        await Task.Delay(1000, token);
+        
+        // Check for cancellation throughout long-running operations
+        if (token.IsCancellationRequested) return;
+        
+        // When work is complete, trigger notification to run in Revit context
+        RevitNotificationHandler.Instance.ShowNotification(new GeneralNotification("Success", "Background task completed"));
+    }
+    catch (Exception ex)
+    {
+        // Log errors and optionally notify user
+        Log.Error(ex, "Background task failed");
+        RevitNotificationHandler.Instance.ShowGeneralNotification("Error", $"Task failed: {ex.Message}");
+    }
+});
+```
+
+## Key Rules
+
+1. **Always respect the cancellation token**
+   - Check `token.IsCancellationRequested` regularly in long-running operations
+   - Return immediately when token is canceled
+
+2. **Error handling**
+   - Always wrap background tasks in try/catch blocks
+   - Use `Log.Error()` to record exceptions
+   - Consider notifying users of important failures
+
+3. **Thread safety**
+   - Never modify Revit elements directly from background threads
+   - Use `RevitNotificationHandler` to queue operations that need Revit context
+
+4. **Notification types**
+   - `GeneralNotification`: For simple messages
+   - `VersionUpdateNotification`: For version updates
+   - `LicenseWarningNotification`: For license warnings
+   - Create custom notification types by extending `NotificationBase`
+
+5. **Custom Revit operations**
+   - Extend the notification system for custom Revit operations:
+
+```csharp
+// Custom notification class
+public class RevitOperationNotification : NotificationBase
+{
+    public Func<UIApplication, Result> RevitOperation { get; private set; }
+
+    public RevitOperationNotification(Func<UIApplication, Result> operation)
+    {
+        Type = NotificationType.GeneralMessage; // Reuse existing or add custom type
+        RevitOperation = operation;
+    }
+}
+
+// Add handling in the notification handler's Execute method
+switch (notification.Type)
+{
+    // Existing cases...
+    
+    case NotificationType.CustomRevitOperation:
+        var operationNotification = notification as RevitOperationNotification;
+        operationNotification.RevitOperation(app);
+        break;
+}
+```
+
+## Complete Example Workflow
+
+```csharp
+// Start a background task
+public void StartBackgroundProcess()
+{
+    BackgroundTaskService.Instance.RunBackgroundTask(async token => 
+    {
+        try
+        {
+            // 1. Do work in background
+            var result = await PerformLongRunningCalculation(token);
+            
+            if (token.IsCancellationRequested) return;
+            
+            // 2. Queue a notification to run in Revit context
+            RevitNotificationHandler.Instance.ShowGeneralNotification(
+                "Operation Complete",
+                $"Calculation result: {result}");
+                
+            // For custom Revit operations:
+            // RevitNotificationHandler.Instance.ShowNotification(
+            //    new RevitOperationNotification(app => {
+            //        // Do something with Revit API here
+            //        return Result.Succeeded;
+            //    })
+            // );
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Background calculation failed");
+            StatisticsCollectorService.Instance.RecordError("CalculationError", ex.Message, ex.StackTrace);
+            RevitNotificationHandler.Instance.ShowGeneralNotification("Error", "Calculation failed. See log for details.");
+        }
+    });
+}
+```
+

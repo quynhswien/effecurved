@@ -1,0 +1,146 @@
+---
+description: This rule is helpful when needed to implement wpf view 
+globs: 
+alwaysApply: false
+---
+# Best Practices for Small WPF Applications with MVVM
+
+## Project Structure
+- **Minimize dependencies**: Use a single MVVM toolkit like CommunityToolkit.Mvvm
+
+## ViewModel Design
+- **Keep ViewModels focused**: One ViewModel per View
+- **Inherit from ObservableObject**: Use CommunityToolkit.Mvvm's base class
+- **Expose public properties**: Keep backing fields private
+- **Avoid code-behind logic**: Business logic belongs in ViewModels
+
+```csharp
+public class MainViewModel : ObservableObject
+{
+    private string _searchText;
+    
+    public string SearchText
+    {
+        get => _searchText;
+        set => SetProperty(ref _searchText, value);
+    }
+}
+```
+
+## Command Implementation
+- **Use RelayCommand**: For simple command implementation
+- **Explicitly trigger CanExecute changes**: Use NotifyCanExecuteChanged
+- **Keep execution logic simple**: Complex logic should be delegated to services
+
+```csharp
+public RelayCommand SearchCommand { get; }
+
+public MainViewModel()
+{
+    SearchCommand = new RelayCommand(ExecuteSearch, CanSearch);
+}
+
+private bool CanSearch() => !string.IsNullOrEmpty(SearchText);
+
+private void ExecuteSearch()
+{
+    // Search logic here
+}
+
+// In property setter:
+set
+{
+    if (SetProperty(ref _searchText, value))
+    {
+        SearchCommand.NotifyCanExecuteChanged();
+    }
+}
+```
+
+## Revit Context compliance
+
+### The Problem
+Revit API calls must run on the Revit main thread. When running commands from WPF UI (button clicks, etc.), you're on the UI thread, causing "Revit API running out of context" errors.
+
+### The Solution: ExternalEvent Pattern
+1. Implement `IExternalEventHandler` in your ViewModel
+2. Create and store an ExternalEvent
+3. When handling UI commands:
+   - Package Revit API calls in an action
+   - Queue with ExternalEvent.Raise()
+   - Use Dispatcher to update UI
+
+### Minimal Implementation Example
+```csharp
+// In ViewModel
+public class MyViewModel : IExternalEventHandler {
+    private ExternalEvent _externalEvent;
+    private Action _currentAction;
+    
+    public MyViewModel() {
+        _externalEvent = ExternalEvent.Create(this);
+    }
+    
+    private void MyCommand() {
+        _currentAction = () => { /* Revit API code */ };
+        _externalEvent.Raise();
+    }
+    
+    public void Execute(UIApplication app) => _currentAction?.Invoke();
+    public string GetName() => "Description";
+}
+```
+
+Remember: All Revit API interactions must be marshaled to the Revit thread!
+
+## Property Notification
+- **Always use SetProperty**: Ensures property change notification
+- **Trigger dependent properties**: Update calculated properties
+- **Manually notify commands**: Call NotifyCanExecuteChanged when needed
+
+## Data Binding
+- **Use OneWay binding** for display-only data
+- **Use TwoWay binding** for user inputs
+- **Set UpdateSourceTrigger** appropriately:
+  - `PropertyChanged` for immediate updates (checkboxes, dropdowns)
+  - `LostFocus` for validation-heavy inputs
+
+```xml
+<TextBox Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" />
+```
+
+## UI Design
+- **Use styles for consistency**: Define common styles in App.xaml
+- **Leverage data templates**: Define templates for your data objects
+- **Implement input validation**: Use INotifyDataErrorInfo for validation
+- **Follow accessibility guidelines**: Tab order, keyboard navigation, contrast
+
+## Error Handling
+- **Validate user input**: In the ViewModel, not the View
+- **Show clear error messages**: Use dialog services or inline validation
+- **Log exceptions**: To diagnose issues later
+- **Gracefully recover**: Don't crash on non-critical errors, better non-crash at all
+
+```csharp
+try
+{
+    // Operation that might fail
+}
+catch (Exception ex)
+{
+    Logger.Log(ex);
+    ShowError("Couldn't save changes. Please try again.");
+}
+```
+
+## Performance Tips
+- **Use IsFrozen**: For freezable resources (brushes, pens)
+- **Virtualize large collections**: Use VirtualizingStackPanel
+- **Delay heavy operations**: Use debouncing for search fields
+
+## Common Pitfalls to Avoid
+- **Don't directly reference Views from ViewModels**
+- **Don't put UI logic in Models**
+- **Don't overuse messaging** for simple parent-child communication
+- **Don't create deeply nested ViewModels**
+

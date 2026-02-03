@@ -1,0 +1,54 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+This project is for create Autodesk Revit Addin using Revit C# API.
+
+# Development guidelines:
+
+## If create new functionality, refer to [project_structure.mdc](mdc:.cursor/rules/project_structure.mdc).
+
+## If need to save or load data to local machine, refer to [local_storage.mdc](mdc:.cursor/rules/local_storage.mdc).
+
+## If need to create wpf view for user interaction, refer to [wpf.mdc](mdc:.cursor/rules/wpf.mdc).
+
+## For non-Revit API code, write code that can run both on .NET 8.0 and .NET Framework 4.8.
+
+## If need to add package, add directly to csproj file, don't run dotnet command to try adding package.
+
+## If need to create Revit parameter, refer to [revit_utils.mdc](mdc:.cursor/rules/revit_utils.mdc)
+
+## If package run on .NET Framework 4.8 but not .NET 8.0, add condition to PackageReference in csproj definition, example:
+```xml
+<PackageReference Include="System.Net.Http" Version="4.3.4" Condition="'$(TargetFramework)' == 'net48'" />
+```
+
+- Actively add debug log to execute process to help debug easier.
+- Make sure all Revit API calls happened in valid Revit context to avoid "Revit API running out of context" errors.
+
+## Making code work with multiple revit API version according to this guide:
+
+- To support the latest APIs in legacy Revit versions:
+```csharp
+#if REVIT2021_OR_GREATER
+    UnitUtils.ConvertFromInternalUnits(69, UnitTypeId.Millimeters);
+#else
+    UnitUtils.ConvertFromInternalUnits(69, DisplayUnitType.DUT_MILLIMETERS);
+#endif
+```
+
+- "#if REVIT2021_OR_GREATER" сompiles a block of code for Revit versions 21, 22, 23 and greater.
+
+To support removed APIs in newer versions of Revit, you can invert the constant:
+
+```csharp
+#if !REVIT2023_OR_GREATER
+    var builtinCategory = (BuiltInCategory) category.Id.IntegerValue;
+#endif
+```
+- "#if !REVIT2023_OR_GREATER" сompiles a block of code for Revit versions 22, 21, 20 and lower.
+
+But only support for Revit version 2021 or higher.
+
+Remember: Call within valid Revit context using ExternalEvent pattern!

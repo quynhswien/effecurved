@@ -1,0 +1,46 @@
+---
+description: This rule have some utilities function for working with Revit API
+globs: 
+alwaysApply: false
+---
+
+# [RevitUtilitiesService.cs](mdc:services/RevitUtilitiesService.cs) Quick Reference
+
+## Purpose
+Utility service for common Revit API operations with error handling and statistics collection.
+
+## Key Features
+1. **Creating Shared Parameters**
+   ```csharp
+   Guid guid = RevitUtilitiesService.Instance.CreateSharedParameter(
+       app, doc, "ParamName", SpecTypeId.String.Text, "GroupName", 
+       categoryId, isInstance: true);
+   ```
+
+2. **Reading Parameter Values**
+   ```csharp
+   string value = RevitUtilitiesService.Instance.GetParameterValue<string>(
+       element, "ParameterName", defaultValue: "");
+   
+   // Handles type conversion automatically
+   double number = RevitUtilitiesService.Instance.GetParameterValue<double>(
+       element, "NumberParameter", defaultValue: 0.0);
+   ```
+
+3. **Setting Parameter Values**
+   ```csharp
+   // Auto-manages transactions if none provided
+   RevitUtilitiesService.Instance.SetParameterValue(
+       element, "ParameterName", "New Value");
+       
+   // Or use in existing transaction
+   using (Transaction tx = new Transaction(doc, "Update Parameters"))
+   {
+       tx.Start();
+       RevitUtilitiesService.Instance.SetParameterValue(
+           element, "ParameterName", value, tx);
+       tx.Commit();
+   }
+   ```
+
+Remember: Call within valid Revit context using ExternalEvent pattern!

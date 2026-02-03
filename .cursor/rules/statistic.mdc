@@ -1,0 +1,55 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+## Add collect statistics on feature usages and errors occurs to this app.
+Note: Do not change StatisticsCollectorService, just use it.
+
+- How to record feature usage:
+    - Definition
+```csharp
+/// <summary>
+/// Records the usage of a feature
+/// </summary>
+/// <param name="featureName">Name of the feature used</param>
+/// <param name="count">Number of times the feature was used</param>
+/// <param name="additionalData">Additional data to record</param>
+public void RecordFeatureUsage(string featureName, int count = 1, Dictionary<string, object> additionalData = null)
+```
+    - Example:
+```csharp
+StatisticsCollectorService.Instance.RecordFeatureUsage("FeatureName");
+// With count
+StatisticsCollectorService.Instance.RecordFeatureUsage("BulkOperation", 5);
+// With additional data
+StatisticsCollectorService.Instance.RecordFeatureUsage("ExportFile", 1, new Dictionary<string, object> { 
+    { "format", "pdf" }, 
+    { "fileSize", 1024 }
+});
+
+```
+- How to record error:
+    - Definition:
+```csharp
+/// <summary>
+/// Records an error that occurred during execution
+/// </summary>
+/// <param name="errorType">Type of error</param>
+/// <param name="errorMessage">Error message</param>
+/// <param name="stackTrace">Stack trace of the error</param>
+/// <param name="additionalData">Additional data to record</param>
+public void RecordError(string errorType, string errorMessage, string stackTrace, Dictionary<string, object> additionalData = null)
+```
+    - Example
+```csharp
+try
+{
+    // Your code
+}
+catch (Exception ex)
+{
+    StatisticsCollectorService.Instance.RecordError("OperationFailed", ex.Message, ex.StackTrace);
+    throw;
+}
+```

@@ -1,0 +1,11 @@
+﻿<RevitAddIns>
+    <AddIn Type="Application">
+        <Name>effecurved</Name>
+        <Assembly>effecurved/effecurved.dll</Assembly>
+        <AddInId>f28b7899-d179-4b36-b9ce-a0eb8c20bdaf</AddInId>
+        <FullClassName>effecurved.Application</FullClassName>
+        <VendorId>Development</VendorId>
+        <VendorDescription>EFFE</VendorDescription>
+        <VendorEmail>effe.revit@gmail.com</VendorEmail>
+    </AddIn>
+</RevitAddIns>

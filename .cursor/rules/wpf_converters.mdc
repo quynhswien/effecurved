@@ -1,0 +1,61 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# WPF Converters Usage Guide
+
+## Available Boolean Converters
+- `InverseBoolConverter`: Inverts boolean value (with MarkupExtension)
+- `InverseBooleanConverter`: Inverts boolean value
+
+## Boolean to Visibility Converters
+- `BoolVisibilityConverter`: true → Visible, false → Hidden (preserves layout space)
+- `BooleanToVisibilityConverter`: true → Visible, false → Collapsed (removes from layout)
+- `InverseBoolVisibilityConverter`: false → Visible, true → Hidden (inverted with preserved space)
+
+## Other Converters
+- `NumberToVisibilityConverter`: positive number → Visible, zero/negative → Collapsed
+- `StringToVisibilityConverter`: non-empty string → Visible, empty/null → Collapsed
+- `EnumVisibilityConverter<TEnum>`: Shows element when enum value matches parameter
+
+## Usage Examples
+
+### In XAML with MarkupExtension
+```xml
+<TextBlock Visibility="{Binding IsEnabled, Converter={BoolVisibilityConverter}}" />
+```
+
+### In XAML with Resource
+```xml
+<Window.Resources>
+    <converters:BooleanToVisibilityConverter x:Key="BoolToVis"/>
+</Window.Resources>
+
+<TextBlock Visibility="{Binding IsEnabled, Converter={StaticResource BoolToVis}}" />
+```
+
+### Using EnumVisibilityConverter
+```xml
+<TextBlock Visibility="{Binding CurrentStatus, 
+           Converter={EnumVisibilityConverter}, 
+           ConverterParameter={x:Static models:Status.Active}}" />
+```
+
+## When to Use Which Converter
+
+1. Use **Hidden** visibility (BoolVisibilityConverter) when:
+   - You want to keep layout spacing
+   - The hidden element affects layout measurements
+   - You need to toggle visibility often without layout shifts
+
+2. Use **Collapsed** visibility (BooleanToVisibilityConverter) when:
+   - You want to completely remove element from layout
+   - Space conservation is important
+
+3. Use **MarkupExtension** converters when:
+   - You want cleaner XAML without declaring resources
+   - The converter is used in many places
+
+4. Use **EnumVisibilityConverter** for state-based UI where different UI elements should be shown based on enum state
+
