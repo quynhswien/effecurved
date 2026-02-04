@@ -5,6 +5,8 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using Autodesk.Revit.UI;
 using effecurved.Commands;
 using effecurved.Models;
@@ -240,15 +242,51 @@ namespace effecurved
         /// </summary>
         private void AddCommandsToPanel(RibbonPanel panel)
         {
-            // Add the Planting Tag Command
-            panel.AddPushButton<StartupCommand>(StartupCommand.COMMAND_NAME)
-                .SetImage("/effecurved;component/Resources/Icons/RibbonIcon16.png")
-                .SetLargeImage("/effecurved;component/Resources/Icons/RibbonIcon32.png");
+            // Only keep the unroll command
+            AddPushButton(
+                panel,
+                internalName: "E-Unroll",
+                buttonText: "E-Unroll",
+                commandType: typeof(UnrollCurvedSurfaceCommand),
+                toolTip: "Unroll curved surfaces into a drafting view."
+            );
+        }
 
-            // Add Unroll Curved Surface Command
-            panel.AddPushButton<UnrollCurvedSurfaceCommand>(UnrollCurvedSurfaceCommand.COMMAND_NAME)
-                .SetImage("/effecurved;component/Resources/Icons/RibbonIcon16.png")
-                .SetLargeImage("/effecurved;component/Resources/Icons/RibbonIcon32.png");
+        private void AddPushButton(RibbonPanel panel, string internalName, string buttonText, Type commandType, string toolTip)
+        {
+            string assemblyPath = commandType.Assembly.Location;
+            string className = commandType.FullName;
+            var data = new PushButtonData(internalName, buttonText, assemblyPath, className);
+            var item = panel.AddItem(data);
+            if (item is not PushButton pb) return;
+
+            // Tooltip: plain English, no bold formatting
+            pb.ToolTip = toolTip;
+
+            // Icons
+            pb.Image = LoadPackImage("/effecurved;component/Resources/Icons/RibbonIcon16.png");
+            pb.LargeImage = LoadPackImage("/effecurved;component/Resources/Icons/RibbonIcon32.png");
+        }
+
+        private ImageSource LoadPackImage(string packRelativePath)
+        {
+            try
+            {
+                // packRelativePath example: "/effecurved;component/Resources/Icons/RibbonIcon16.png"
+                var uri = new Uri("pack://application:,,," + packRelativePath, UriKind.Absolute);
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.UriSource = uri;
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.EndInit();
+                bmp.Freeze();
+                return bmp;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, $"Failed to load ribbon icon: {packRelativePath}");
+                return null;
+            }
         }
 
         #endregion

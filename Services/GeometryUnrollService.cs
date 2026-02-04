@@ -387,15 +387,21 @@ namespace effecurved.Services
                 Log.Warning($"Edge loop sort incomplete: {sorted.Count}/{edgeArray.Size} edges in order; skipping this boundary");
                 return null;
             }
+            const double tol = 0.1;
+            sorted = RotateLoopToStartAtOrigin(sorted, tol, out bool startFirstAtMinX);
             List<XYZ> points2D = new List<XYZ>();
             XYZ lastPoint = null;
-            const double tol = 0.1;
             for (int ei = 0; ei < sorted.Count; ei++)
             {
                 Curve curve3D = sorted[ei].AsCurve();
                 IList<XYZ> tess = curve3D.Tessellate();
                 if (tess == null || tess.Count == 0) continue;
                 bool reverse = (lastPoint != null && tess.Count > 0 && lastPoint.DistanceTo(tess[tess.Count - 1]) <= tol);
+                if (ei == 0 && startFirstAtMinX && tess.Count > 0)
+                {
+                    double x0 = tess[0].X, x1 = tess[tess.Count - 1].X;
+                    reverse = (x1 < x0);
+                }
                 int start = (reverse ? tess.Count - 1 : (ei == 0 ? 0 : 1));
                 int end = (reverse ? 0 : tess.Count);
                 int step = (reverse ? -1 : 1);
@@ -406,7 +412,6 @@ namespace effecurved.Services
                 }
                 lastPoint = tess[reverse ? 0 : tess.Count - 1];
             }
-            // Không mirror: điểm 2 (gốc) ở trái, điểm 1 (cuối) ở phải — khớp như ảnh 2
             return CreateCurvesFromPoints(points2D);
         }
 
@@ -580,6 +585,7 @@ namespace effecurved.Services
             if (sorted.Count != largestLoop.Size)
                 Log.Warning($"Ruled surface: edge sort incomplete ({sorted.Count}/{largestLoop.Size}); boundary may be invalid");
             const double tol = 0.1;
+            sorted = RotateLoopToStartAtOrigin(sorted, tol, out bool startFirstAtMinX);
             List<XYZ> points2D = new List<XYZ>();
             double lengthAtStartOfEdge = 0;
             XYZ previousPoint3D = null;
@@ -590,15 +596,18 @@ namespace effecurved.Services
                 IList<XYZ> tess = curve3D.Tessellate();
                 if (tess == null || tess.Count == 0) continue;
                 bool reverse = (previousPoint3D != null && tess.Count > 0 && previousPoint3D.DistanceTo(tess[tess.Count - 1]) <= tol);
+                if (ei == 0 && startFirstAtMinX && tess.Count > 0)
+                {
+                    double x0 = tess[0].X, x1 = tess[tess.Count - 1].X;
+                    reverse = (x1 < x0);
+                }
                 int start = reverse ? tess.Count - 1 : (ei == 0 ? 0 : 1);
                 int end = reverse ? 0 : tess.Count;
                 int step = reverse ? -1 : 1;
-                // Thu thập điểm trên edge theo thứ tự (Q₀..Qₘ)
                 var Q = new List<XYZ>();
                 for (int i = start; (reverse && i >= end) || (!reverse && i < end); i += step)
                     Q.Add(tess[i]);
                 if (Q.Count == 0) continue;
-                // Chord cumulative trong edge: c₀=0, cᵢ=Σ|QⱼQⱼ₊₁|, chuẩn hóa tᵢ=cᵢ/cₘ → s(Pᵢ)=lengthBeforeEdge + tᵢ×edge.Length
                 var chordCumulative = new List<double> { 0 };
                 for (int j = 0; j < Q.Count - 1; j++)
                     chordCumulative.Add(chordCumulative[chordCumulative.Count - 1] + Q[j].DistanceTo(Q[j + 1]));
@@ -613,7 +622,6 @@ namespace effecurved.Services
                 lengthAtStartOfEdge += edgeLength;
                 previousPoint3D = tess[reverse ? 0 : tess.Count - 1];
             }
-            // Không mirror: điểm 2 (gốc) ở trái (x=0), điểm 1 (cuối) ở phải (x=totalLength) để khớp như ảnh 2
             curves2D = CreateCurvesFromPoints(points2D);
             Log.Debug($"Created {curves2D.Count} curves for ruled surface (developed length = {lengthAtStartOfEdge:F1})");
             return curves2D;
@@ -647,6 +655,7 @@ namespace effecurved.Services
             if (sorted.Count != largestLoop.Size)
                 Log.Warning($"Boundary tessellation: edge sort incomplete ({sorted.Count}/{largestLoop.Size})");
             const double tol = 0.1;
+            sorted = RotateLoopToStartAtOrigin(sorted, tol, out bool startFirstAtMinX);
             List<XYZ> points2D = new List<XYZ>();
             double lengthAtStartOfEdge = 0;
             XYZ previousPoint3D = null;
@@ -657,6 +666,11 @@ namespace effecurved.Services
                 IList<XYZ> tess = curve3D.Tessellate();
                 if (tess == null || tess.Count == 0) continue;
                 bool reverse = (previousPoint3D != null && tess.Count > 0 && previousPoint3D.DistanceTo(tess[tess.Count - 1]) <= tol);
+                if (ei == 0 && startFirstAtMinX && tess.Count > 0)
+                {
+                    double x0 = tess[0].X, x1 = tess[tess.Count - 1].X;
+                    reverse = (x1 < x0);
+                }
                 int start = reverse ? tess.Count - 1 : (ei == 0 ? 0 : 1);
                 int end = reverse ? 0 : tess.Count;
                 int step = reverse ? -1 : 1;
@@ -681,6 +695,42 @@ namespace effecurved.Services
             curves2D = CreateCurvesFromPoints(points2D);
             Log.Debug($"Created {curves2D.Count} curves from boundary tessellation (developed length = {lengthAtStartOfEdge:F1})");
             return curves2D;
+        }
+
+        /// <summary>
+        /// Rotates the sorted edge list so we start from the vertex with minimum X (3D), making it the origin (0,0) in 2D.
+        /// Returns (rotated list, skipFirstPointForFirstEdge) so the first point output is that origin.
+        /// </summary>
+        private static List<Edge> RotateLoopToStartAtOrigin(List<Edge> sorted, double tol, out bool startFirstEdgeAtMinX)
+        {
+            startFirstEdgeAtMinX = false;
+            if (sorted == null || sorted.Count == 0) return sorted;
+            // Build start vertex of each edge in current traversal order
+            var startVertices = new List<XYZ>();
+            XYZ prevEnd = null;
+            for (int ei = 0; ei < sorted.Count; ei++)
+            {
+                Curve c = sorted[ei].AsCurve();
+                IList<XYZ> tess = c.Tessellate();
+                if (tess == null || tess.Count == 0) continue;
+                bool rev = (prevEnd != null && tess.Count > 0 && prevEnd.DistanceTo(tess[tess.Count - 1]) <= tol);
+                XYZ startV = rev ? tess[tess.Count - 1] : tess[0];
+                startVertices.Add(startV);
+                prevEnd = rev ? tess[0] : tess[tess.Count - 1];
+            }
+            if (startVertices.Count == 0) return sorted;
+            int k = 0;
+            double minX = startVertices[0].X;
+            for (int i = 1; i < startVertices.Count; i++)
+            {
+                if (startVertices[i].X < minX) { minX = startVertices[i].X; k = i; }
+            }
+            if (k == 0) return sorted;
+            var rotated = new List<Edge>();
+            for (int i = 0; i < sorted.Count; i++)
+                rotated.Add(sorted[(k + i) % sorted.Count]);
+            startFirstEdgeAtMinX = true;
+            return rotated;
         }
 
         /// <summary>
